@@ -46,7 +46,7 @@
 </head>
 
 <body>
-  <div id="status">⏳ INICIALIZANDO...</div>
+  <div id="status">INICIALIZANDO...</div>
   
   <div id="wrapper">
     <video id="video" width="640" height="480" autoplay playsinline muted></video>
@@ -73,10 +73,10 @@
 
     // 2. Cargar Modelo
     async function loadYOLO() {
-      status.textContent = "⏳ CARGANDO MODELO...";
+      status.textContent = "CARGANDO MODELO...";
       // Asegúrate de que la ruta /model/model.json sea correcta en tu servidor
       model = await tf.loadGraphModel("./model/model.json");
-      status.textContent = "🔍 BUSCANDO OBJETOS...";
+      status.textContent = "bUSCANDO A BRILLANTINA...";
       status.style.color = "#00FF00";
     }
 
@@ -159,7 +159,7 @@
         }
       });
 
-      status.textContent = found ? "🚨 OBJETO DETECTADO" : "🔍 BUSCANDO OBJETOS...";
+      status.textContent = found ? "BRILLANTINA DETECTADA CON IA " : "🔍 BUSCANDO OBJETOS...";
       status.style.background = found ? "#b30000" : "#333";
 
       // Limpiar tensores de la memoria GPU
@@ -178,7 +178,7 @@
         detectFrame();
       } catch (e) {
         console.error(e);
-        status.textContent = "❌ ERROR AL INICIAR";
+        status.textContent = "ERROR AL INICIAR";
       }
     }
 
