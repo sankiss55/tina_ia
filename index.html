@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>YOLO Detector en Vivo</title>
 
+  <!-- TensorFlow.js -->
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0"></script>
 
   <style>
@@ -40,14 +41,14 @@
       border-radius: 20px;
       background: #333;
       font-weight: bold;
-      letter-spacing: 1px;
     }
   </style>
 </head>
 
 <body>
+
   <div id="status">INICIALIZANDO...</div>
-  
+
   <div id="wrapper">
     <video id="video" width="640" height="480" autoplay playsinline muted></video>
     <canvas id="canvas"></canvas>
@@ -60,9 +61,33 @@
     const status = document.getElementById("status");
 
     let model;
-    const CONF_THRESHOLD = 0.5; // Ajusta este valor (0.0 a 1.0) para la sensibilidad
+    const CONF_THRESHOLD = 0.5;
 
-    // 1. Configurar Cámara
+    // 🔥 CONTROL DE RENDIMIENTO
+    let frameCount = 0;
+    const DETECT_EVERY_N_FRAMES = 8; // ← cambia a 10 si sigue lento
+
+    // 1️⃣ FORZAR GPU (WEBGL)
+    async function forceBackend() {
+      await tf.setBackend('webgl');
+      await tf.ready();
+
+      const backend = tf.getBackend();
+
+      if (backend === 'webgl') {
+        alert('✅ TensorFlow.js está usando GPU (WebGL)');
+        status.textContent = 'GPU ACTIVADA (WEBGL)';
+        status.style.background = '#006600';
+      } else {
+        alert('❌ TensorFlow.js está usando CPU');
+        status.textContent = 'CPU (LENTO)';
+        status.style.background = '#660000';
+      }
+
+      console.log('Backend:', backend);
+    }
+
+    // 2️⃣ CÁMARA
     async function setupCamera() {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { width: 640, height: 480, facingMode: "environment" }
@@ -71,111 +96,102 @@
       return new Promise(resolve => video.onloadedmetadata = resolve);
     }
 
-    // 2. Cargar Modelo
+    // 3️⃣ MODELO
     async function loadYOLO() {
       status.textContent = "CARGANDO MODELO...";
-      // Asegúrate de que la ruta /model/model.json sea correcta en tu servidor
       model = await tf.loadGraphModel("./model/model.json");
-      status.textContent = "BUSCANDO A BRILLANTINA...";
-      status.style.color = "#00FF00";
+      status.textContent = "MODELO LISTO - BUSCANDO...";
+      status.style.background = "#333";
     }
 
-    // 3. Detección y Dibujo
+    // 4️⃣ LOOP PRINCIPAL
+    async function detectLoop() {
+      frameCount++;
+
+      // Dibujar video siempre (fluidez)
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+      // 🔥 SOLO DETECTAR CADA X FRAMES
+      if (frameCount % DETECT_EVERY_N_FRAMES === 0) {
+        await detectFrame();
+      }
+
+      requestAnimationFrame(detectLoop);
+    }
+
+    // 5️⃣ DETECCIÓN
     async function detectFrame() {
       if (!model) return;
 
-      // Sincronizar tamaño de canvas con video
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-
-      // Preprocesamiento e Inferencia
-      const [output, inputTensor] = tf.tidy(() => {
-        const img = tf.browser.fromPixels(video)
+      const input = tf.tidy(() => {
+        return tf.browser.fromPixels(video)
           .resizeBilinear([640, 640])
           .div(255.0)
           .expandDims(0);
-        return [model.execute(img), img];
       });
 
-      // Extraer el tensor de salida (maneja Array, Map o Tensor único)
-      let rawOutput;
-      if (output instanceof tf.Tensor) {
-        rawOutput = output;
-      } else if (Array.isArray(output)) {
-        rawOutput = output[0];
-      } else {
-        rawOutput = output[Object.keys(output)[0]];
+      let output = model.execute(input);
+
+      let raw;
+      if (output instanceof tf.Tensor) raw = output;
+      else if (Array.isArray(output)) raw = output[0];
+      else raw = output[Object.keys(output)[0]];
+
+      if (raw.shape[1] < raw.shape[2]) {
+        raw = raw.transpose([0, 2, 1]);
       }
 
-      // IMPORTANTE: Si el modelo es YOLOv8, transponemos de [1, 84, 8400] a [1, 8400, 84]
-      let processedOutput = rawOutput;
-      if (rawOutput.shape[1] < rawOutput.shape[2]) {
-        processedOutput = rawOutput.transpose([0, 2, 1]);
-      }
-
-      const data = await processedOutput.array();
-      
-      // Limpiar canvas y dibujar video
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
+      const data = await raw.array();
       const predictions = data[0];
+
       let found = false;
 
       predictions.forEach(row => {
-        // En YOLOv8, los scores de clases empiezan tras los 4 valores de box
         const scores = row.slice(4);
         const maxScore = Math.max(...scores);
 
         if (maxScore > CONF_THRESHOLD) {
           found = true;
-          
-          // YOLO entrega [centro_x, centro_y, ancho, alto]
+
           const [cx, cy, w, h] = row.slice(0, 4);
 
-          // Escalar coordenadas al tamaño del canvas
           const scaleX = canvas.width / 640;
           const scaleY = canvas.height / 640;
 
           const width = w * scaleX;
           const height = h * scaleY;
-          const x = (cx * scaleX) - (width / 2);
-          const y = (cy * scaleY) - (height / 2);
+          const x = (cx * scaleX) - width / 2;
+          const y = (cy * scaleY) - height / 2;
 
-          // --- DIBUJAR RECUADRO ---
           ctx.strokeStyle = "#00FF00";
           ctx.lineWidth = 3;
           ctx.strokeRect(x, y, width, height);
 
-          // --- DIBUJAR ETIQUETA ---
           ctx.fillStyle = "#00FF00";
           ctx.font = "16px Arial";
           const label = `${(maxScore * 100).toFixed(0)}%`;
-          const textWidth = ctx.measureText(label).width;
-          
-          ctx.fillRect(x, y - 25, textWidth + 10, 25); // Fondo
-          ctx.fillStyle = "black";
-          ctx.fillText(label, x + 5, y - 7); // Texto
+          ctx.fillRect(x, y - 22, ctx.measureText(label).width + 10, 22);
+          ctx.fillStyle = "#000";
+          ctx.fillText(label, x + 5, y - 6);
         }
       });
 
-      status.textContent = found ? "BRILLANTINA DETECTADA CON IA " : " BUSCANDO OBJETOS...";
-      status.style.background = found ? "#b30000" : "#333";
+      status.textContent = found
+        ? "OBJETO DETECTADO CON IA"
+        : "BUSCANDO OBJETOS...";
 
-      // Limpiar tensores de la memoria GPU
-      tf.dispose(output);
-      tf.dispose(inputTensor);
-      if (processedOutput !== rawOutput) tf.dispose(processedOutput);
-
-      requestAnimationFrame(detectFrame);
+      tf.dispose([input, output, raw]);
     }
 
-    // Iniciar Aplicación
+    // 6️⃣ START
     async function main() {
       try {
+        await forceBackend();
         await setupCamera();
         await loadYOLO();
-        detectFrame();
+        detectLoop();
       } catch (e) {
         console.error(e);
         status.textContent = "ERROR AL INICIAR";
@@ -184,5 +200,7 @@
 
     main();
   </script>
+
 </body>
 </html>
+          
