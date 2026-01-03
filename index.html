@@ -5,7 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>YOLO Detector en Vivo</title>
 
-  <!-- TensorFlow.js -->
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0"></script>
 
   <style>
@@ -20,23 +19,27 @@
       font-family: sans-serif;
       color: white;
     }
+
     #wrapper {
       position: relative;
       border: 4px solid #333;
       border-radius: 12px;
       overflow: hidden;
-      box-shadow: 0 10px 30px rgba(0,0,0,0.5);
     }
-    video, canvas {
+
+    video {
       display: block;
     }
+
     canvas {
       position: absolute;
       top: 0;
       left: 0;
+      pointer-events: none; /* 👈 IMPORTANTE */
     }
+
     #status {
-      margin-bottom: 15px;
+      margin-bottom: 12px;
       padding: 8px 16px;
       border-radius: 20px;
       background: #333;
@@ -63,78 +66,74 @@
     let model;
     const CONF_THRESHOLD = 0.5;
 
-    // 🔥 CONTROL DE RENDIMIENTO
     let frameCount = 0;
-    const DETECT_EVERY_N_FRAMES = 8; // ← cambia a 10 si sigue lento
+    const DETECT_EVERY_N_FRAMES = 8;
 
-    // 1️⃣ FORZAR GPU (WEBGL)
+    // 🔥 FORZAR GPU
     async function forceBackend() {
-      await tf.setBackend('webgl');
+      await tf.setBackend("webgl");
       await tf.ready();
 
       const backend = tf.getBackend();
+      alert(
+        backend === "webgl"
+          ? "✅ Usando GPU (WebGL)"
+          : "❌ Usando CPU"
+      );
 
-      if (backend === 'webgl') {
-        alert('✅ TensorFlow.js está usando GPU (WebGL)');
-        status.textContent = 'GPU ACTIVADA (WEBGL)';
-        status.style.background = '#006600';
-      } else {
-        alert('❌ TensorFlow.js está usando CPU');
-        status.textContent = 'CPU (LENTO)';
-        status.style.background = '#660000';
-      }
-
-      console.log('Backend:', backend);
+      status.textContent = `Backend: ${backend.toUpperCase()}`;
+      status.style.background = backend === "webgl" ? "#006600" : "#660000";
     }
 
-    // 2️⃣ CÁMARA
+    // 📷 CÁMARA
     async function setupCamera() {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { width: 640, height: 480, facingMode: "environment" }
       });
       video.srcObject = stream;
-      return new Promise(resolve => video.onloadedmetadata = resolve);
+      return new Promise(r => video.onloadedmetadata = r);
     }
 
-    // 3️⃣ MODELO
+    // 🧠 MODELO
     async function loadYOLO() {
       status.textContent = "CARGANDO MODELO...";
       model = await tf.loadGraphModel("./model/model.json");
-      status.textContent = "MODELO LISTO - BUSCANDO...";
+      status.textContent = "MODELO LISTO";
       status.style.background = "#333";
     }
 
-    // 4️⃣ LOOP PRINCIPAL
-    async function detectLoop() {
+    // 🔁 LOOP
+    async function loop() {
       frameCount++;
 
-      // Dibujar video siempre (fluidez)
+      // Canvas siempre del tamaño del video
       canvas.width = video.videoWidth;
       canvas.height = video.videoHeight;
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-      // 🔥 SOLO DETECTAR CADA X FRAMES
+      // Limpia SOLO las cajas
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
       if (frameCount % DETECT_EVERY_N_FRAMES === 0) {
-        await detectFrame();
+        await detect();
       }
 
-      requestAnimationFrame(detectLoop);
+      requestAnimationFrame(loop);
     }
 
-    // 5️⃣ DETECCIÓN
-    async function detectFrame() {
+    // 🎯 DETECCIÓN
+    async function detect() {
       if (!model) return;
 
-      const input = tf.tidy(() => {
-        return tf.browser.fromPixels(video)
+      const input = tf.tidy(() =>
+        tf.browser.fromPixels(video)
           .resizeBilinear([640, 640])
-          .div(255.0)
-          .expandDims(0);
-      });
+          .div(255)
+          .expandDims(0)
+      );
 
       let output = model.execute(input);
-
       let raw;
+
       if (output instanceof tf.Tensor) raw = output;
       else if (Array.isArray(output)) raw = output[0];
       else raw = output[Object.keys(output)[0]];
@@ -156,14 +155,13 @@
           found = true;
 
           const [cx, cy, w, h] = row.slice(0, 4);
-
           const scaleX = canvas.width / 640;
           const scaleY = canvas.height / 640;
 
           const width = w * scaleX;
           const height = h * scaleY;
-          const x = (cx * scaleX) - width / 2;
-          const y = (cy * scaleY) - height / 2;
+          const x = cx * scaleX - width / 2;
+          const y = cy * scaleY - height / 2;
 
           ctx.strokeStyle = "#00FF00";
           ctx.lineWidth = 3;
@@ -179,23 +177,17 @@
       });
 
       status.textContent = found
-        ? "OBJETO DETECTADO CON IA"
-        : "BUSCANDO OBJETOS...";
+        ? "OBJETO DETECTADO"
+        : "BUSCANDO...";
 
       tf.dispose([input, output, raw]);
     }
 
-    // 6️⃣ START
     async function main() {
-      try {
-        await forceBackend();
-        await setupCamera();
-        await loadYOLO();
-        detectLoop();
-      } catch (e) {
-        console.error(e);
-        status.textContent = "ERROR AL INICIAR";
-      }
+      await forceBackend();
+      await setupCamera();
+      await loadYOLO();
+      loop();
     }
 
     main();
@@ -203,4 +195,3 @@
 
 </body>
 </html>
-          
