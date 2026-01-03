@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>YOLO Detector en Vivo</title>
+
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0"></script>
+
+  <style>
+    body {
+      margin: 0;
+      background: #1a1a1a;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      font-family: sans-serif;
+      color: white;
+    }
+    #wrapper {
+      position: relative;
+      border: 4px solid #333;
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+    }
+    video, canvas {
+      display: block;
+    }
+    canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+    }
+    #status {
+      margin-bottom: 15px;
+      padding: 8px 16px;
+      border-radius: 20px;
+      background: #333;
+      font-weight: bold;
+      letter-spacing: 1px;
+    }
+  </style>
+</head>
+
+<body>
+  <div id="status">⏳ INICIALIZANDO...</div>
+  
+  <div id="wrapper">
+    <video id="video" width="640" height="480" autoplay playsinline muted></video>
+    <canvas id="canvas"></canvas>
+  </div>
+
+  <script>
+    const video = document.getElementById("video");
+    const canvas = document.getElementById("canvas");
+    const ctx = canvas.getContext("2d");
+    const status = document.getElementById("status");
+
+    let model;
+    const CONF_THRESHOLD = 0.5; // Ajusta este valor (0.0 a 1.0) para la sensibilidad
+
+    // 1. Configurar Cámara
+    async function setupCamera() {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: 640, height: 480, facingMode: "environment" }
+      });
+      video.srcObject = stream;
+      return new Promise(resolve => video.onloadedmetadata = resolve);
+    }
+
+    // 2. Cargar Modelo
+    async function loadYOLO() {
+      status.textContent = "⏳ CARGANDO MODELO...";
+      // Asegúrate de que la ruta /model/model.json sea correcta en tu servidor
+      model = await tf.loadGraphModel("/model/model.json");
+      status.textContent = "🔍 BUSCANDO OBJETOS...";
+      status.style.color = "#00FF00";
+    }
+
+    // 3. Detección y Dibujo
+    async function detectFrame() {
+      if (!model) return;
+
+      // Sincronizar tamaño de canvas con video
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+
+      // Preprocesamiento e Inferencia
+      const [output, inputTensor] = tf.tidy(() => {
+        const img = tf.browser.fromPixels(video)
+          .resizeBilinear([640, 640])
+          .div(255.0)
+          .expandDims(0);
+        return [model.execute(img), img];
+      });
+
+      // Extraer el tensor de salida (maneja Array, Map o Tensor único)
+      let rawOutput;
+      if (output instanceof tf.Tensor) {
+        rawOutput = output;
+      } else if (Array.isArray(output)) {
+        rawOutput = output[0];
+      } else {
+        rawOutput = output[Object.keys(output)[0]];
+      }
+
+      // IMPORTANTE: Si el modelo es YOLOv8, transponemos de [1, 84, 8400] a [1, 8400, 84]
+      let processedOutput = rawOutput;
+      if (rawOutput.shape[1] < rawOutput.shape[2]) {
+        processedOutput = rawOutput.transpose([0, 2, 1]);
+      }
+
+      const data = await processedOutput.array();
+      
+      // Limpiar canvas y dibujar video
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+      const predictions = data[0];
+      let found = false;
+
+      predictions.forEach(row => {
+        // En YOLOv8, los scores de clases empiezan tras los 4 valores de box
+        const scores = row.slice(4);
+        const maxScore = Math.max(...scores);
+
+        if (maxScore > CONF_THRESHOLD) {
+          found = true;
+          
+          // YOLO entrega [centro_x, centro_y, ancho, alto]
+          const [cx, cy, w, h] = row.slice(0, 4);
+
+          // Escalar coordenadas al tamaño del canvas
+          const scaleX = canvas.width / 640;
+          const scaleY = canvas.height / 640;
+
+          const width = w * scaleX;
+          const height = h * scaleY;
+          const x = (cx * scaleX) - (width / 2);
+          const y = (cy * scaleY) - (height / 2);
+
+          // --- DIBUJAR RECUADRO ---
+          ctx.strokeStyle = "#00FF00";
+          ctx.lineWidth = 3;
+          ctx.strokeRect(x, y, width, height);
+
+          // --- DIBUJAR ETIQUETA ---
+          ctx.fillStyle = "#00FF00";
+          ctx.font = "16px Arial";
+          const label = `${(maxScore * 100).toFixed(0)}%`;
+          const textWidth = ctx.measureText(label).width;
+          
+          ctx.fillRect(x, y - 25, textWidth + 10, 25); // Fondo
+          ctx.fillStyle = "black";
+          ctx.fillText(label, x + 5, y - 7); // Texto
+        }
+      });
+
+      status.textContent = found ? "🚨 OBJETO DETECTADO" : "🔍 BUSCANDO OBJETOS...";
+      status.style.background = found ? "#b30000" : "#333";
+
+      // Limpiar tensores de la memoria GPU
+      tf.dispose(output);
+      tf.dispose(inputTensor);
+      if (processedOutput !== rawOutput) tf.dispose(processedOutput);
+
+      requestAnimationFrame(detectFrame);
+    }
+
+    // Iniciar Aplicación
+    async function main() {
+      try {
+        await setupCamera();
+        await loadYOLO();
+        detectFrame();
+      } catch (e) {
+        console.error(e);
+        status.textContent = "❌ ERROR AL INICIAR";
+      }
+    }
+
+    main();
+  </script>
+</body>
+</html>
