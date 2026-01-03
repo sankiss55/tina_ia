@@ -75,7 +75,7 @@
     async function loadYOLO() {
       status.textContent = "⏳ CARGANDO MODELO...";
       // Asegúrate de que la ruta /model/model.json sea correcta en tu servidor
-      model = await tf.loadGraphModel("/model/model.json");
+      model = await tf.loadGraphModel("./model/model.json");
       status.textContent = "🔍 BUSCANDO OBJETOS...";
       status.style.color = "#00FF00";
     }
