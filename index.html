@@ -76,7 +76,7 @@
       status.textContent = "CARGANDO MODELO...";
       // Asegúrate de que la ruta /model/model.json sea correcta en tu servidor
       model = await tf.loadGraphModel("./model/model.json");
-      status.textContent = "bUSCANDO A BRILLANTINA...";
+      status.textContent = "BUSCANDO A BRILLANTINA...";
       status.style.color = "#00FF00";
     }
 
@@ -159,7 +159,7 @@
         }
       });
 
-      status.textContent = found ? "BRILLANTINA DETECTADA CON IA " : "🔍 BUSCANDO OBJETOS...";
+      status.textContent = found ? "BRILLANTINA DETECTADA CON IA " : " BUSCANDO OBJETOS...";
       status.style.background = found ? "#b30000" : "#333";
 
       // Limpiar tensores de la memoria GPU
