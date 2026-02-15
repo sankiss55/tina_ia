@@ -2,181 +2,104 @@
 <html lang="es">
 <head>
   <meta charset="UTF-8">
-  <title>MediaPipe Object Detection - Live Stream</title>
+  <title>YOLO Real-Time GitHub</title>
   <style>
-    body {
-      margin: 0;
-      background: #000;
-      font-family: sans-serif;
-      overflow: hidden; /* Evitar scroll */
+    body { margin: 0; background: #000; font-family: sans-serif; color: white; display: flex; flex-direction: column; align-items: center; }
+    .video-container { position: relative; width: 640px; height: 480px; background: #111; margin-top: 20px; }
+    video, canvas { position: absolute; top: 0; left: 0; width: 640px; height: 480px; transform: scaleX(-1); }
+    #status { padding: 10px; background: #222; width: 100%; text-align: center; font-family: monospace; }
+    button { 
+      padding: 15px 30px; font-size: 18px; cursor: pointer; border-radius: 50px; border: none;
+      background: #00ffcc; color: black; font-weight: bold; margin-top: 20px;
     }
-
-    /* Contenedor para superponer canvas sobre video */
-    .video-container {
-      position: relative;
-      width: 100vw;
-      height: 100vh;
-      display: flex;
-      justify-content: center;
-      align-items: center;
-    }
-
-    video {
-      position: absolute;
-      width: 640px;
-      height: 480px;
-      object-fit: cover;
-      transform: scaleX(-1); /* Efecto espejo */
-    }
-
-    canvas {
-      position: absolute;
-      width: 640px;
-      height: 480px;
-      transform: scaleX(-1); /* Efecto espejo igual que el video */
-      z-index: 10; /* Encima del video */
-    }
-
-    #status {
-      position: absolute;
-      top: 20px;
-      left: 50%;
-      transform: translateX(-50%);
-      background: rgba(0, 0, 0, 0.7);
-      color: #00ffcc;
-      padding: 10px 20px;
-      border-radius: 20px;
-      z-index: 20;
-      font-weight: bold;
-    }
-    
-    button {
-      margin-top: 10px;
-      padding: 10px 20px;
-      font-size: 16px;
-      cursor: pointer;
-    }
+    button:disabled { background: #555; cursor: not-allowed; }
   </style>
 </head>
 <body>
 
-  <div id="status">Cargando MediaPipe...</div>
-
+  <div id="status">CARGANDO MODELO IA...</div>
+  
   <div class="video-container">
-    <video id="webcam" autoplay playsinline></video>
+    <video id="webcam" autoplay playsinline muted></video>
     <canvas id="output_canvas"></canvas>
   </div>
 
+  <button id="btnStart" disabled>ESPERA...</button>
+
   <script type="module">
-    import {
-      ObjectDetector,
-      FilesetResolver
-    } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.2";
+    import { ObjectDetector, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.2";
 
     const video = document.getElementById("webcam");
     const canvas = document.getElementById("output_canvas");
     const ctx = canvas.getContext("2d");
     const statusText = document.getElementById("status");
+    const btnStart = document.getElementById("btnStart");
 
     let objectDetector;
-    let runningMode = "VIDEO"; // 🔥 ESTA ES LA CLAVE (Live Stream)
     let lastVideoTime = -1;
 
-    // 1. Inicializar el Detector de MediaPipe
-    const initializeObjectDetector = async () => {
-      const vision = await FilesetResolver.forVisionTasks(
-        "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.2/wasm"
-      );
-
-      objectDetector = await ObjectDetector.createFromOptions(vision, {
-        baseOptions: {
-          // Usamos el modelo "Lite" oficial de Google para demos rápidas
-          modelAssetPath: `https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite0/float32/1/efficientdet_lite0.tflite`,
-          delegate: "GPU" // 🔥 Forzar uso de GPU
-        },
-        scoreThreshold: 0.5, // Confianza mínima (50%)
-        runningMode: runningMode
-      });
-
-      statusText.innerText = "Sistema Listo. Activa la cámara.";
-      enableCam();
-    };
-
-    // 2. Activar Webcam
-    const enableCam = async () => {
-      if (!objectDetector) return;
-
+    // 1. Inicializar MediaPipe
+    async function init() {
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { width: 640, height: 480 }
+        const vision = await FilesetResolver.forVisionTasks(
+          "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.2/wasm"
+        );
+        objectDetector = await ObjectDetector.createFromOptions(vision, {
+          baseOptions: {
+            modelAssetPath: `https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite0/float32/1/efficientdet_lite0.tflite`,
+            delegate: "GPU"
+          },
+          scoreThreshold: 0.5,
+          runningMode: "VIDEO"
         });
-        video.srcObject = stream;
-        video.addEventListener("loadeddata", predictWebcam);
-        statusText.innerText = "Detectando objetos...";
-        statusText.style.color = "#00ff00";
+        statusText.innerText = "MODELO CARGADO ✅";
+        btnStart.innerText = "ACTIVAR CÁMARA";
+        btnStart.disabled = false;
       } catch (err) {
-        console.error(err);
-        statusText.innerText = "Error: No se pudo acceder a la cámara";
+        statusText.innerText = "ERROR AL CARGAR: " + err;
       }
-    };
-
-    // 3. Bucle de Predicción (Loop)
-    async function predictWebcam() {
-      // Ajustar tamaño del canvas al video real
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-
-      let startTimeMs = performance.now();
-
-      // Detectar solo si el frame ha cambiado
-      if (video.currentTime !== lastVideoTime) {
-        lastVideoTime = video.currentTime;
-        
-        // 🔥 AQUÍ OCURRE LA MAGIA: detectForVideo
-        const detections = objectDetector.detectForVideo(video, startTimeMs);
-        
-        // Dibujar resultados
-        displayVideoDetections(detections);
-      }
-
-      // Volver a llamar lo más rápido posible (requestAnimationFrame)
-      window.requestAnimationFrame(predictWebcam);
     }
 
-    // 4. Dibujar Cajas
-    function displayVideoDetections(result) {
-      // Limpiar canvas anterior
+    // 2. Función de Predicción
+    function predict() {
+      if (video.currentTime !== lastVideoTime) {
+        lastVideoTime = video.currentTime;
+        const detections = objectDetector.detectForVideo(video, performance.now());
+        draw(detections);
+      }
+      window.requestAnimationFrame(predict);
+    }
+
+    // 3. Dibujar en Canvas
+    function draw(result) {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-      for (const detection of result.detections) {
-        // Coordenadas de la caja
+      result.detections.forEach(detection => {
         const { originX, originY, width, height } = detection.boundingBox;
-        
-        // Categoría (ej: "person", "cup")
-        const category = detection.categories[0];
-        const scorePct = Math.round(category.score * 100);
-
-        // Dibujar Rectángulo
         ctx.strokeStyle = "#00FF00";
         ctx.lineWidth = 4;
         ctx.strokeRect(originX, originY, width, height);
-
-        // Dibujar Fondo del texto
+        
         ctx.fillStyle = "#00FF00";
-        ctx.font = "16px Arial";
-        const text = `${category.categoryName} ${scorePct}%`;
-        const textWidth = ctx.measureText(text).width;
-        ctx.fillRect(originX, originY - 25, textWidth + 10, 25);
-
-        // Dibujar Texto
-        ctx.fillStyle = "black";
-        ctx.fillText(text, originX + 5, originY - 7);
-      }
+        ctx.font = "18px Arial";
+        ctx.fillText(`${detection.categories[0].categoryName} ${Math.round(detection.categories[0].score * 100)}%`, originX, originY - 10);
+      });
     }
 
-    // Arrancar todo
-    initializeObjectDetector();
+    // 4. Evento del botón
+    btnStart.addEventListener("click", async () => {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+      video.srcObject = stream;
+      video.onloadedmetadata = () => {
+        video.play();
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        predict();
+        btnStart.style.display = "none";
+        statusText.innerText = "DETECTANDO EN TIEMPO REAL";
+      };
+    });
 
+    init();
   </script>
 </body>
 </html>
