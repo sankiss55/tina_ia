@@ -2,196 +2,181 @@
 <html lang="es">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>YOLO Detector en Vivo</title>
-
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0"></script>
-
+  <title>MediaPipe Object Detection - Live Stream</title>
   <style>
     body {
       margin: 0;
-      background: #1a1a1a;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      height: 100vh;
+      background: #000;
       font-family: sans-serif;
-      color: white;
+      overflow: hidden; /* Evitar scroll */
     }
 
-    #wrapper {
+    /* Contenedor para superponer canvas sobre video */
+    .video-container {
       position: relative;
-      border: 4px solid #333;
-      border-radius: 12px;
-      overflow: hidden;
+      width: 100vw;
+      height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
     }
 
     video {
-      display: block;
+      position: absolute;
+      width: 640px;
+      height: 480px;
+      object-fit: cover;
+      transform: scaleX(-1); /* Efecto espejo */
     }
 
     canvas {
       position: absolute;
-      top: 0;
-      left: 0;
-      pointer-events: none; /* 👈 IMPORTANTE */
+      width: 640px;
+      height: 480px;
+      transform: scaleX(-1); /* Efecto espejo igual que el video */
+      z-index: 10; /* Encima del video */
     }
 
     #status {
-      margin-bottom: 12px;
-      padding: 8px 16px;
+      position: absolute;
+      top: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0, 0, 0, 0.7);
+      color: #00ffcc;
+      padding: 10px 20px;
       border-radius: 20px;
-      background: #333;
+      z-index: 20;
       font-weight: bold;
+    }
+    
+    button {
+      margin-top: 10px;
+      padding: 10px 20px;
+      font-size: 16px;
+      cursor: pointer;
     }
   </style>
 </head>
-
 <body>
 
-  <div id="status">INICIALIZANDO...</div>
+  <div id="status">Cargando MediaPipe...</div>
 
-  <div id="wrapper">
-    <video id="video" width="640" height="480" autoplay playsinline muted></video>
-    <canvas id="canvas"></canvas>
+  <div class="video-container">
+    <video id="webcam" autoplay playsinline></video>
+    <canvas id="output_canvas"></canvas>
   </div>
 
-  <script>
-    const video = document.getElementById("video");
-    const canvas = document.getElementById("canvas");
+  <script type="module">
+    import {
+      ObjectDetector,
+      FilesetResolver
+    } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.2";
+
+    const video = document.getElementById("webcam");
+    const canvas = document.getElementById("output_canvas");
     const ctx = canvas.getContext("2d");
-    const status = document.getElementById("status");
+    const statusText = document.getElementById("status");
 
-    let model;
-    const CONF_THRESHOLD = 0.5;
+    let objectDetector;
+    let runningMode = "VIDEO"; // 🔥 ESTA ES LA CLAVE (Live Stream)
+    let lastVideoTime = -1;
 
-    let frameCount = 0;
-    const DETECT_EVERY_N_FRAMES = 8;
-
-    // 🔥 FORZAR GPU
-    async function forceBackend() {
-      await tf.setBackend("webgl");
-      await tf.ready();
-
-      const backend = tf.getBackend();
-      alert(
-        backend === "webgl"
-          ? "✅ Usando GPU (WebGL)"
-          : "❌ Usando CPU"
+    // 1. Inicializar el Detector de MediaPipe
+    const initializeObjectDetector = async () => {
+      const vision = await FilesetResolver.forVisionTasks(
+        "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.2/wasm"
       );
 
-      status.textContent = `Backend: ${backend.toUpperCase()}`;
-      status.style.background = backend === "webgl" ? "#006600" : "#660000";
-    }
-
-    // 📷 CÁMARA
-    async function setupCamera() {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: 640, height: 480, facingMode: "environment" }
+      objectDetector = await ObjectDetector.createFromOptions(vision, {
+        baseOptions: {
+          // Usamos el modelo "Lite" oficial de Google para demos rápidas
+          modelAssetPath: `https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite0/float32/1/efficientdet_lite0.tflite`,
+          delegate: "GPU" // 🔥 Forzar uso de GPU
+        },
+        scoreThreshold: 0.5, // Confianza mínima (50%)
+        runningMode: runningMode
       });
-      video.srcObject = stream;
-      return new Promise(r => video.onloadedmetadata = r);
-    }
 
-    // 🧠 MODELO
-    async function loadYOLO() {
-      status.textContent = "CARGANDO MODELO...";
-      model = await tf.loadGraphModel("./model/model.json");
-      status.textContent = "MODELO LISTO";
-      status.style.background = "#333";
-    }
+      statusText.innerText = "Sistema Listo. Activa la cámara.";
+      enableCam();
+    };
 
-    // 🔁 LOOP
-    async function loop() {
-      frameCount++;
+    // 2. Activar Webcam
+    const enableCam = async () => {
+      if (!objectDetector) return;
 
-      // Canvas siempre del tamaño del video
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { width: 640, height: 480 }
+        });
+        video.srcObject = stream;
+        video.addEventListener("loadeddata", predictWebcam);
+        statusText.innerText = "Detectando objetos...";
+        statusText.style.color = "#00ff00";
+      } catch (err) {
+        console.error(err);
+        statusText.innerText = "Error: No se pudo acceder a la cámara";
+      }
+    };
+
+    // 3. Bucle de Predicción (Loop)
+    async function predictWebcam() {
+      // Ajustar tamaño del canvas al video real
       canvas.width = video.videoWidth;
       canvas.height = video.videoHeight;
 
-      // Limpia SOLO las cajas
+      let startTimeMs = performance.now();
+
+      // Detectar solo si el frame ha cambiado
+      if (video.currentTime !== lastVideoTime) {
+        lastVideoTime = video.currentTime;
+        
+        // 🔥 AQUÍ OCURRE LA MAGIA: detectForVideo
+        const detections = objectDetector.detectForVideo(video, startTimeMs);
+        
+        // Dibujar resultados
+        displayVideoDetections(detections);
+      }
+
+      // Volver a llamar lo más rápido posible (requestAnimationFrame)
+      window.requestAnimationFrame(predictWebcam);
+    }
+
+    // 4. Dibujar Cajas
+    function displayVideoDetections(result) {
+      // Limpiar canvas anterior
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-      if (frameCount % DETECT_EVERY_N_FRAMES === 0) {
-        await detect();
+      for (const detection of result.detections) {
+        // Coordenadas de la caja
+        const { originX, originY, width, height } = detection.boundingBox;
+        
+        // Categoría (ej: "person", "cup")
+        const category = detection.categories[0];
+        const scorePct = Math.round(category.score * 100);
+
+        // Dibujar Rectángulo
+        ctx.strokeStyle = "#00FF00";
+        ctx.lineWidth = 4;
+        ctx.strokeRect(originX, originY, width, height);
+
+        // Dibujar Fondo del texto
+        ctx.fillStyle = "#00FF00";
+        ctx.font = "16px Arial";
+        const text = `${category.categoryName} ${scorePct}%`;
+        const textWidth = ctx.measureText(text).width;
+        ctx.fillRect(originX, originY - 25, textWidth + 10, 25);
+
+        // Dibujar Texto
+        ctx.fillStyle = "black";
+        ctx.fillText(text, originX + 5, originY - 7);
       }
-
-      requestAnimationFrame(loop);
     }
 
-    // 🎯 DETECCIÓN
-    async function detect() {
-      if (!model) return;
+    // Arrancar todo
+    initializeObjectDetector();
 
-      const input = tf.tidy(() =>
-        tf.browser.fromPixels(video)
-          .resizeBilinear([640, 640])
-          .div(255)
-          .expandDims(0)
-      );
-
-      let output = model.execute(input);
-      let raw;
-
-      if (output instanceof tf.Tensor) raw = output;
-      else if (Array.isArray(output)) raw = output[0];
-      else raw = output[Object.keys(output)[0]];
-
-      if (raw.shape[1] < raw.shape[2]) {
-        raw = raw.transpose([0, 2, 1]);
-      }
-
-      const data = await raw.array();
-      const predictions = data[0];
-
-      let found = false;
-
-      predictions.forEach(row => {
-        const scores = row.slice(4);
-        const maxScore = Math.max(...scores);
-
-        if (maxScore > CONF_THRESHOLD) {
-          found = true;
-
-          const [cx, cy, w, h] = row.slice(0, 4);
-          const scaleX = canvas.width / 640;
-          const scaleY = canvas.height / 640;
-
-          const width = w * scaleX;
-          const height = h * scaleY;
-          const x = cx * scaleX - width / 2;
-          const y = cy * scaleY - height / 2;
-
-          ctx.strokeStyle = "#00FF00";
-          ctx.lineWidth = 3;
-          ctx.strokeRect(x, y, width, height);
-
-          ctx.fillStyle = "#00FF00";
-          ctx.font = "16px Arial";
-          const label = `${(maxScore * 100).toFixed(0)}%`;
-          ctx.fillRect(x, y - 22, ctx.measureText(label).width + 10, 22);
-          ctx.fillStyle = "#000";
-          ctx.fillText(label, x + 5, y - 6);
-        }
-      });
-
-      status.textContent = found
-        ? "OBJETO DETECTADO"
-        : "BUSCANDO...";
-
-      tf.dispose([input, output, raw]);
-    }
-
-    async function main() {
-      await forceBackend();
-      await setupCamera();
-      await loadYOLO();
-      loop();
-    }
-
-    main();
   </script>
-
 </body>
 </html>
